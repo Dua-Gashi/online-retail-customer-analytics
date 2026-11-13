@@ -29,7 +29,7 @@ def clean_data(df):
     _log("Dublikate: ", n - len(df), len(df))
     
     # 2. Anulimet (faturat me C) ndahen veqmas
-    is_cancel = df["IOnvoice"].str.startswith("C")
+    is_cancel = df["Invoice"].str.startswith("C")
     returns = df[is_cancel].copy()
     df = df[~is_cancel]
     _log("Anulime (ndahen te returns)", len(returns), len(df))
