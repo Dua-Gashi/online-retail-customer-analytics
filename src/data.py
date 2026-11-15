@@ -8,7 +8,7 @@ PRODUCT_CODE_PATTERN = r"^\d{5}"
 
 def load_data(path=RAW_PATH):
     """Ngarko te dhenat e perpunuar nga CSV"""
-    df = pd.read_csv(path, parse_dates=["Invoice"], low_memory=False)
+    df = pd.read_csv(path, parse_dates=["InvoiceDate"], low_memory=False)
     df["Invoice"] = df["Invoice"].astype(str)
     df["StockCode"] = df["StockCode"].astype(str)
     return df
@@ -63,7 +63,7 @@ def add_columns(df):
     df = df.copy()
     df["Customer ID"] = df["Customer ID"].astype("Int64")
     df["Revenue"] = df["Quantity"] * df["Price"]
-    df["Date"] = df["InvoiceDate"].to_normalize()
+    df["Date"] = df["InvoiceDate"].dt.normalize()
     df["Year"] = df["InvoiceDate"].dt.year
     df["Month"] = df["InvoiceDate"].dt.month
     df["YearMonth"] = df["InvoiceDate"].dt.to_period("M").astype(str)
