@@ -1,4 +1,5 @@
-from src.data import(load_data, clean_data, add_columns, validate_data, save_processed)
+from src.data import(PROCESSED_DIR, load_data, clean_data, add_columns, validate_data, save_processed)
+from src.features import build_rfm, validate_rfm
 
 def main():
     print("1. Ngarkimi i te dhenave")
@@ -15,6 +16,14 @@ def main():
     
     print("\n4. Ruajtja")
     save_processed(sales, returns)
+    
+    print("\n5. Tabela RFM")
+    rfm = build_rfm(sales)
+    validate_rfm(rfm)
+    rfm.to_csv(PROCESSED_DIR / "rfm.csv")
+    print(f"Klientet me RFM: {len(rfm):,}")
+    print(rfm.describe().round(1))
+    
     
     print("\nPermbledhje\n")
     print(f"Periudha: {sales["Date"].min().date()} -> {sales["Date"].max().date()}")
