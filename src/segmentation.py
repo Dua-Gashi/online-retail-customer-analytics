@@ -1,5 +1,7 @@
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
 
 from src.features import log_transform
 
@@ -48,3 +50,17 @@ def rfm_quantile_segments(rfm):
     scores = rfm_scores(rfm)
     scores["Segment"] = scores.apply(label_segment, axis=1)
     return scores
+
+def evaluate_kmeans(scaled, k_range=range(2, 11), random_state=42):
+    """Per qdo k trajnon KMeans dhe kthen inertia dhe silhouette"""
+    
+    rows = []
+    for k in k_range:
+        model = KMeans(n_clusters=k, n_init=10, random_state=random_state)
+        labels = model.fit_predict(scaled)
+        rows.append({
+            "k": k,
+            "inertia": model.inertia_,
+            "silhouette": silhouette_score(scaled, labels)
+        })
+    return pd.DataFrame(rows).set_index("k")
