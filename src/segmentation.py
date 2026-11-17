@@ -1,7 +1,7 @@
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
-from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score
+from sklearn.cluster import KMeans, AgglomerativeClustering
+from sklearn.metrics import silhouette_score, adjusted_rand_score
 
 from src.features import log_transform
 
@@ -64,3 +64,38 @@ def evaluate_kmeans(scaled, k_range=range(2, 11), random_state=42):
             "silhouette": silhouette_score(scaled, labels)
         })
     return pd.DataFrame(rows).set_index("k")
+
+def fit_kmeans(scaled, k, random_state=42):
+    """Trajnon KMeans me k grupe dhe kthen (modeli, etiketat) me Customer ID si indeks."""
+    model = KMeans(n_clusters=k, n_init=10, random_state=random_state)
+    labels = pd.Series(model.fit_predict(scaled), index=scaled.index, name="Cluster")
+    return model, labels
+
+def fit_hierarchical(scaled, k):
+    """Trajnon Hierarchical Clustering (Ward) me k grupe dhe kthen etiketat"""
+    model = AgglomerativeClustering(n_clusters=k, linkage="ward")
+    return pd.Series(model.fit_predict(scaled), index=scaled.index, name="Cluster")
+
+def profile_cluster(rfm, labels):
+    """Profili i secilit grup: madhesia, mediana e R, F, M dhe pjesa e te ardhurave"""
+    data = rfm.join(labels)
+    profile = data.groupby(labels.name).agg(
+        Klientet = ("Recency", "size"),
+        Recency_mediana =("Recency", "median"),
+        Freuqency_mediana =("Frequency", "median"),
+        Monetary_mediana =("Monetary", "median"),
+        Te_ardhurat =("Monetary", "sum")
+    )
+    
+    profile["Pjesa_e_klienteve_%"] = profile["Klientet"] / profile["Klientet"].sum() * 100
+    profile["Pjesa_e_te_ardhurave_%"] = profile["Te_ardhurat"] / profile["Te_ardhurat"].sum() * 100
+    return profile.round(1) 
+
+def stability_check(scaled, k, seeds=range(10)):
+    """Trajnon KMeans me seeds te ndryshme dhe krahason secilin me te parin (ARI)"""
+    all_labels=[
+        KMeans(n_clusters=k, n_init=10, random_state=s).fit_predict(scaled)
+        for s in seeds
+    ]
+    reference = all_labels[0]
+    return [adjusted_rand_score(reference, other) for other in all_labels[1:]]
