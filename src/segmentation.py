@@ -5,6 +5,7 @@ from sklearn.metrics import silhouette_score, adjusted_rand_score
 from sklearn.decomposition import PCA
 
 from src.features import log_transform
+from src.data import PROCESSED_DIR
 
 # keta emra vlejne per k = 5, random_state=42 dhe kete dataset
 CLUSTER_NAMES = {
@@ -132,3 +133,21 @@ def final_segmentation(rfm, k=5, names=None):
     result["Segment"] = result["Cluster"].map(names)
     assert result["Segment"].notna().all(), "Ka grupe pa emer"
     return result
+
+def validate_segments(segments, rfm):
+    """Kontrollon qe segmenti perfundimtar eshte i plote dhe i sakt"""
+    
+    assert len(segments) == len(rfm), "Numri i klienteve nuk perputhet"
+    assert segments.index.is_unique, "Customer ID i perseritur"
+    assert segments["Segment"].notna().all(), "Ka kliente pa segment"
+    assert segments["Segment"].nunique() == len(CLUSTER_NAMES), "Numri i segmenteve nuk perputhet"
+    print("Kontrollet e segmentimit: OK")
+    
+def save_segments(segments, folder=PROCESSED_DIR):
+    """Ruan segmentet per Power BI: tabelen e klienteve dhe profilin e segmenteve"""
+    
+    folder.mkdir(parents=True, exist_ok=True)
+    segments.to_csv(folder / "customers_segments.csv")
+    profile = profile_cluster(segments[["Recency", "Frequency", "Monetary"]], segments["Segment"])
+    profile.to_csv(folder / "segment_profile.csv")
+    print(f"U ruajten {len(segments):,} kliente te {folder}")

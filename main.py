@@ -1,5 +1,18 @@
-from src.data import(PROCESSED_DIR, load_data, clean_data, add_columns, validate_data, save_processed)
+from src.data import(
+    PROCESSED_DIR, 
+    load_data, 
+    clean_data, 
+    add_columns, 
+    validate_data, 
+    save_processed
+    )
 from src.features import build_rfm, validate_rfm
+from src.segmentation import(
+    final_segmentation,
+    profile_cluster,
+    validate_segments,
+    save_segments
+) 
 
 def main():
     print("1. Ngarkimi i te dhenave")
@@ -24,6 +37,12 @@ def main():
     print(f"Klientet me RFM: {len(rfm):,}")
     print(rfm.describe().round(1))
     
+    print("\n6. Segmentimi i klienteve")
+    segments = final_segmentation(rfm)
+    validate_segments(segments, rfm)
+    profile = profile_cluster(rfm, segments["Segment"]).sort_values("Te_ardhurat", ascending=False)
+    print(profile.to_string()) 
+    save_segments(segments)   
     
     print("\nPermbledhje\n")
     print(f"Periudha: {sales["Date"].min().date()} -> {sales["Date"].max().date()}")
