@@ -2,8 +2,18 @@ import pandas as pd
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans, AgglomerativeClustering
 from sklearn.metrics import silhouette_score, adjusted_rand_score
+from sklearn.decomposition import PCA
 
 from src.features import log_transform
+
+# keta emra vlejne per k = 5, random_state=42 dhe kete dataset
+CLUSTER_NAMES = {
+    0: "Lost",
+    1: "VIP",
+    2: "Champions",
+    3: "Recent",
+    4: "At risk"
+}
 
 def scale_features(rfm):
     """Zbaton logaritem dhe pastaj StandardScaler, Kthen (tabela e shkallezuar, scaler)"""
@@ -99,3 +109,26 @@ def stability_check(scaled, k, seeds=range(10)):
     ]
     reference = all_labels[0]
     return [adjusted_rand_score(reference, other) for other in all_labels[1:]]
+
+def pca_2d(scaled, random_state=42):
+    """Reduktimi ne 2 dimensione per vizualizim. Kthen (koordinatat PC1/PC2, modeli PCA)"""
+    
+    pca = PCA(n_components=2, random_state=random_state)
+    coords = pd.DataFrame(
+        pca.fit_transform(scaled),
+        index=scaled.index,
+        columns=["PC1", "PC2"]
+    )
+    return coords, pca
+
+def final_segmentation(rfm, k=5, names=None):
+    """Segmentimi perfundimtar: shkallezim, KMeans dhe emertim. Kthen rfm + Cluster + Segment"""
+    
+    if names is None:
+        names = CLUSTER_NAMES
+    scaled, _ = scale_features(rfm)
+    _, labels = fit_kmeans(scaled, k)
+    result = rfm.join(labels)
+    result["Segment"] = result["Cluster"].map(names)
+    assert result["Segment"].notna().all(), "Ka grupe pa emer"
+    return result
