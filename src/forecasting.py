@@ -1,5 +1,8 @@
 import pandas as pd
 import numpy as np
+from dataclasses import dataclass
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_absolute_error, mean_squared_error
 
 FEATURES = [
     "lag_1", "lag_2", "lag_7", "lag_14", "avg_7", "avg_14", "day_of_week", 
@@ -84,9 +87,10 @@ def features_for_dates(data, target_col="net_revenue"):
     return f
 
 def make_dataset(daily):
-    """Kthen tabelen e gatshme per model: vecorit + target, pa rreshta me vlera qe mungojne"""
+    """Kthen tabelen e gatshme per model: vecorit, target dhe is_open, pa rreshta me vlera qe mungojne"""
     
     f = features_for_dates(daily)
+    f["is_open"] = daily["is_open"].astype(bool)
     return f.dropna(subset=FEATURES + ["target"]) 
 
 def validate_features(f):
@@ -99,4 +103,97 @@ def validate_features(f):
         assert np.isclose(f["avg_7"].iloc[i], t[i - 7:i].mean()), "avg_7 perdor diten aktuale ose te ardhmen"    
     assert f["day_of_week"].between(0, 6).all(), "dita e javes jashte intervalit"
     print("Kontrollet e vecorive: OK")    
-        
+
+
+
+@dataclass
+class TrainingResult:
+    model: RandomForestRegressor
+    test_predictions: pd.DataFrame
+    metrics: pd.DataFrame
+    train_size: int
+    test_size: int
+    importance: pd.DataFrame
+
+
+def split_chronological(data, test_fraction=0.2):
+    """Ndarje kronologjike: pjesa e pare per trajnim, pjesa e fundit per testim""" 
+    
+    split = int(len(data) * (1 - test_fraction)) 
+    return data.iloc[:split], data.iloc[split:] 
+
+def regression_metrics(y_true, y_pred):
+    """MAE dhe RMSE per nje seri parashikimesh"""
+    
+    return{
+        "MAE": float(mean_absolute_error(y_true,y_pred)),
+        "RMSE": float(np.sqrt(mean_squared_error(y_true, y_pred)))
+    }
+    
+def build_metrics_table(test_view):
+    """Tabela e metrikave per modelin dhe baseline_t, per te gjitha ditet dhe vetem per ditet me shitje""" 
+
+    candidates = [
+        ("Random Forest", "prediction"),
+        ("Baseline: dje", "baseline_yesterday"),
+        ("Baseline: java e kaluar", "baseline_week")
+    ]
+    open_view = test_view[test_view["is_open"]]
+    rows = {}
+    for name, col in candidates:
+        all_days = regression_metrics(test_view["actual"], test_view[col])
+        open_days = regression_metrics(open_view["actual"], open_view[col])
+        rows[name] = {
+            "MAE": all_days["MAE"],
+            "RMSE": all_days["RMSE"],
+            "MAE_dite_me_shitje": open_days["MAE"],
+            "RMSE_dite_me_shitje": open_days["RMSE"]
+        }
+    return pd.DataFrame(rows).T
+
+def train_and_test(daily, n_estimators=300, random_state=42):
+    """Trajnon Random Forest mbi pjesen e pare te kohes dhe e teston mbi pjesen e fundit"""
+    
+    data = make_dataset(daily)
+    if len(data) < 110:
+        raise ValueError(f"Ka vetem {len(data)} dite per model. Duhet te jene te pakten 110")
+    
+    train, test = split_chronological(data)
+    assert train.index.max() < test.index.min(), "Trajnimi dhe testimi mbivendosen ne kohe"
+    
+    model = RandomForestRegressor(
+        n_estimators=n_estimators,
+        max_depth=12,
+        min_samples_leaf=3,
+        random_state=random_state,
+        n_jobs=-1
+    )
+    model.fit(train[FEATURES], train["target"])
+    pred = model.predict(test[FEATURES])
+    
+    test_view = pd.DataFrame(
+        {
+            "actual": test["target"],
+            "prediction": pred,
+            "baseline_yesterday": test["lag_1"],
+            "baseline_week": test["lag_7"],
+            "is_open": test["is_open"],
+        },
+        index = test.index
+    )
+    
+    importance = pd.DataFrame(
+        {
+            "feature": FEATURES,
+            "importance": model.feature_importances_
+        }
+    ).sort_values("importance", ascending=False)
+    
+    return TrainingResult(
+        model=model,
+        test_predictions=test_view,
+        metrics=build_metrics_table(test_view),
+        train_size=len(train),
+        test_size=len(test),
+        importance=importance,
+    )
