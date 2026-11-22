@@ -1,8 +1,13 @@
 import pandas as pd
 import numpy as np
 from dataclasses import dataclass
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.compose import ColumnTransformer
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import TimeSeriesSplit
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.pipeline import make_pipeline
 
 FEATURES = [
     "lag_1", "lag_2", "lag_7", "lag_14", "avg_7", "avg_14", "day_of_week", 
@@ -130,14 +135,14 @@ def regression_metrics(y_true, y_pred):
         "RMSE": float(np.sqrt(mean_squared_error(y_true, y_pred)))
     }
     
-def build_metrics_table(test_view):
+def build_metrics_table(test_view, candidates=None):
     """Tabela e metrikave per modelin dhe baseline_t, per te gjitha ditet dhe vetem per ditet me shitje""" 
-
-    candidates = [
-        ("Random Forest", "prediction"),
-        ("Baseline: dje", "baseline_yesterday"),
-        ("Baseline: java e kaluar", "baseline_week")
-    ]
+    if candidates is None:
+        candidates = [
+            ("Random Forest", "prediction"),
+            ("Baseline: dje", "baseline_yesterday"),
+            ("Baseline: java e kaluar", "baseline_week")
+        ]
     open_view = test_view[test_view["is_open"]]
     rows = {}
     for name, col in candidates:
@@ -197,3 +202,96 @@ def train_and_test(daily, n_estimators=300, random_state=42):
         test_size=len(test),
         importance=importance,
     )
+    
+def make_linear_model():
+    """Linear Regression me one-hot per diten e javes (numri 0-6 nuk eshte shkalle lineare)"""
+    
+    prep = ColumnTransformer(
+        [("dow", OneHotEncoder(handle_unknown="ignore"), ["day_of_week"])],
+        remainder="passthrough"
+    )
+    return make_pipeline(prep, LinearRegression())
+
+def get_models(random_state=42):
+    """Fjalor me modelet qe krahasohen"""
+    
+    return{
+        "Linear Regression": make_linear_model(),
+        "Random Forest": RandomForestRegressor(
+            n_estimators=300,
+            max_depth=12,
+            min_samples_leaf=3,
+            random_state=random_state,
+            n_jobs=-1
+        ),
+        "Gradient Boosting": GradientBoostingRegressor(
+            n_estimators=300,
+            learning_rate=0.05,
+            max_depth=3,
+            subsample=0.8,
+            random_state=random_state
+        ),
+    }
+    
+def compare_models(daily):
+    """Trajnon te gjiotha modelet mbi te njejtin trajnim dhe i teston mbi te njejtin testim"""
+    
+    data = make_dataset(daily)
+    train, test = split_chronological(data)
+    
+    test_view = pd.DataFrame(
+        {
+            "actual": test["target"],
+            "baseline_yesterday": test["lag_1"],
+            "baseline_week": test["lag_7"],
+            "is_open": test["is_open"],
+        },
+        index=test.index
+    )
+    
+    models = get_models()
+    for name, model in models.items():
+        model.fit(train[FEATURES], train["target"])
+        test_view[name] = model.predict(test[FEATURES])
+        
+    candidates = [(name, name) for name in models]
+    candidates += [("Baseline: dje", "baseline_yesterday"), ("Baseline: java e kaluar", "baseline_week")]
+    return build_metrics_table(test_view, candidates), test_view
+
+def cross_validate_models(daily, n_splits=5):
+    """Vleresim me TimeSeriesSplit: cdo fold trajnon mbi te kaluaren dhe teston mbi bllokun pasues"""
+    
+    data = make_dataset(daily)
+    splitter = TimeSeriesSplit(n_splits=n_splits)
+    rows = []
+    
+    for fold, (train_idx, test_idx) in enumerate(splitter.split(data), start=1):
+        train = data.iloc[train_idx]
+        test = data.iloc[test_idx]
+        open_test = test[test["is_open"]]
+        info = {
+            "fold": fold,
+            "train_dite": len(train),
+            "test_start": test.index.min().date(),
+            "test_end": test.index.max().date()
+        }
+        
+        for name, model in get_models().items():
+            model.fit(train[FEATURES], train["target"])
+            pred = pd.Series(model.predict(test[FEATURES]), index=test.index)
+            rows.append({
+                **info,
+                "model": name,
+                "MAE": mean_absolute_error(test["target"], pred),
+                "MAE_dite_me_shitje": mean_absolute_error(open_test["target"], pred.loc[open_test.index]),         
+            })
+            
+        for name, col in [("Baseline: dje", "lag_1"), ("Baseline: java e kaluar", "lag_7")]:
+            rows.append({
+                **info,
+                "model": name,
+                "MAE": mean_absolute_error(test["target"], test[col]),
+                "MAE_dite_me_shitje": mean_absolute_error(open_test["target"], open_test[col]),
+            })
+            
+    return pd.DataFrame(rows)
