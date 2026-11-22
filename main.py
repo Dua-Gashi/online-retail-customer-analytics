@@ -12,6 +12,16 @@ from src.segmentation import(
     profile_cluster,
     validate_segments,
     save_segments
+)
+from src.forecasting import (
+    build_daily_series,
+    validate_daily,
+    features_for_dates,
+    validate_features,
+    compare_models,
+    train_final_model,
+    predict_future,
+    save_forecast_figure,
 ) 
 
 def main():
@@ -42,7 +52,20 @@ def main():
     validate_segments(segments, rfm)
     profile = profile_cluster(rfm, segments["Segment"]).sort_values("Te_ardhurat", ascending=False)
     print(profile.to_string()) 
-    save_segments(segments)   
+    save_segments(segments)  
+    
+    print("\n7. Parashikimi i shitjeve ditore")
+    daily = build_daily_series(sales, returns, drop_last_day=True)
+    validate_daily(daily)
+    validate_features(features_for_dates(daily))
+
+    comparison, _ = compare_models(daily)
+    print(comparison.sort_values("MAE_dite_me_shitje").round(0).to_string())
+
+    final_model = train_final_model(daily)
+    forecast = predict_future(daily, final_model, days=7)
+    print(forecast.to_string())
+    save_forecast_figure(daily, forecast) 
     
     print("\nPermbledhje\n")
     print(f"Periudha: {sales["Date"].min().date()} -> {sales["Date"].max().date()}")

@@ -8,11 +8,14 @@ from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.pipeline import make_pipeline
+from pathlib import Path
 
 FEATURES = [
     "lag_1", "lag_2", "lag_7", "lag_14", "avg_7", "avg_14", "day_of_week", 
     "month", "is_weekend", "year_end_break", "year_sin", "year_cos"
 ]
+
+FIGURES_DIR = Path(__file__).resolve().parent.parent / "reports" / "figures"
 
 
 def build_daily_series(sales, returns=None, drop_last_day=False):
@@ -295,3 +298,129 @@ def cross_validate_models(daily, n_splits=5):
             })
             
     return pd.DataFrame(rows)
+
+def make_random_forest(random_state=42, n_jobs=1):
+    """Random Forest me te njejtat hiperparametra si ne krahsim"""
+    
+    return RandomForestRegressor(
+        n_estimators=300,
+        max_depth=12,
+        min_samples_leaf=3,
+        random_state=random_state,
+        n_jobs=n_jobs,
+    )
+    
+def train_final_model(daily, random_state=42):
+    """Trajnon Random Forest mbi te gjitha ditet e disponueshme (per parashikimin e se ardhmes)"""
+    
+    data = make_dataset(daily)
+    model = make_random_forest(random_state)
+    model.fit(data[FEATURES], data["target"])
+    return model
+
+def _predict_next(model, history, next_day):
+    """Parashikon nje dite: ndertohen veqorite nga 20 ditet e fundit plus diten qe parashikohet"""
+    
+    window = history["net_revenue"].tail(20)
+    placeholder = pd.Series([np.nan], index=pd.DatetimeIndex([next_day]))
+    series = pd.concat([window, placeholder]).to_frame("net_revenue")
+    x = features_for_dates(series).loc[[next_day], FEATURES]
+    if x.isna().any().any():
+        raise ValueError("Mungojne ditet e kaluara te nevojshme per parashikimin")
+    return float(model.predict(x)[0])
+
+def predict_future(daily, model, days=7):
+    """Parashikim rekursiv: cdo dite e re perdor parashikimet e diteve te meparshme si 'te verteta'."""
+
+    if not 1 <= days <= 14:
+        raise ValueError("Parashikimi lejohet per 1 deri 14 dite")
+    if daily["net_revenue"].tail(14).isna().any():
+        raise ValueError("14 ditet e fundit duhet te jene te plota")
+    
+    history = daily[["net_revenue"]].copy()
+    records = []
+    for _ in range(days):
+        next_day = history.index[-1] + pd.Timedelta(days=1)
+        estimate = _predict_next(model, history, next_day)
+        history.loc[next_day, "net_revenue"] = estimate
+        records.append({
+            "date": next_day,
+            "day": next_day.day_name(),
+            "forecast": round(estimate, 0)
+        })
+    return pd.DataFrame(records).set_index("date")
+
+def backtest_horizons(daily, max_h=7, random_state=42):
+    """Per cdo date origjine ne periudhen e testimit parashikon 1..max_h dite perpara
+    (rekursivisht) dhe e krahason me te verteten. Modeli trajnohet vetem mbi trajnimin
+    """
+    data = make_dataset(daily)
+    train, test = split_chronological(data)
+    model = make_random_forest(random_state)
+    model.fit(train[FEATURES], train["target"])
+    
+    net = daily["net_revenue"]
+    is_open = daily["is_open"]
+    last_date = daily.index.max()
+    origins = pd.date_range(
+        test.index.min() - pd.Timedelta(days=1),
+        last_date - pd.Timedelta(days=max_h),
+        freq="D"
+    )
+    
+    rows = []
+    for origin in origins:
+        history = daily.loc[:origin, ["net_revenue"]].copy()
+        for h in range(1, max_h + 1):
+            day = origin + pd.Timedelta(days=h)
+            estimate = _predict_next(model, history, day)
+            history.loc[day, "net_revenue"] = estimate
+            rows.append({
+                "origin": origin,
+                "h": h,
+                "day": day,
+                "actual": net.loc[day],
+                "prediction": estimate,
+                "baseline_week": net.loc[day - pd.Timedelta(days=7)],
+                "is_open": bool(is_open.loc[day])
+            })
+    return pd.DataFrame(rows)
+
+def horizon_summary(hz):
+    """MEA sipas horizontit h (sa dite perpara), per modelin dhe baseline-in 'java e kaluar'""" 
+    
+    hz = hz.copy()
+    hz["gabim_modeli"] = (hz["actual"] - hz["prediction"]).abs()
+    hz["gabim_baseline"] = (hz["actual"] - hz["baseline_week"]).abs()
+    cols = ["gabim_modeli", "gabim_baseline"]
+    all_days = hz.groupby("h")[cols].mean()
+    open_days = hz[hz["is_open"]].groupby("h")[cols].mean()
+    return pd.DataFrame({
+        "MAE_modeli": all_days["gabim_modeli"],
+        "MAE_baseline_java": all_days["gabim_baseline"],
+        "MAE_modeli_dite_me_shitje": open_days["gabim_modeli"],
+        "MAE_baseline_dite_me_shitje": open_days["gabim_baseline"],
+    })
+    
+def save_forecast_figure(daily, forecast, folder=FIGURES_DIR, last_days=60):
+    """Ruan grafikun: te ardhurat reale te ditet e fundit dhe parashikimet"""
+    
+    import matplotlib.pyplot as plt
+    
+    folder.mkdir(parents=True, exist_ok=True)
+    recent = daily["net_revenue"].tail(last_days)
+    xs = [recent.index[-1], *forecast.index]
+    ys = [recent.iloc[-1], *forecast["forecast"]]
+    
+    fig, ax = plt.subplots(figsize=(12, 5))
+    ax.plot(recent.index, recent.values, label="Reale (neto)", marker="o", markersize=3)
+    ax.plot(xs, ys, label="Parashikim", marker="o", markersize=4, linestyle="--", color="tab:red")
+    ax.set_title("te ardhurat neto ditore: 60 ditet e fundit dhe parashikimi")
+    ax.set_xlabel("Data")
+    ax.set_ylabel("Te ardhurat neto (£)")
+    ax.legend()
+    fig.tight_layout()
+    path = folder / "forecast_next_7_days.png"
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    print(f"U ruajt grafiku: {path}")
