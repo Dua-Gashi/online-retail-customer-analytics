@@ -5,7 +5,7 @@ from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.compose import ColumnTransformer
 from sklearn.linear_model import LinearRegression
-from sklearn.model_selection import TimeSeriesSplit
+from sklearn.model_selection import TimeSeriesSplit, RandomizedSearchCV,  cross_val_score
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.pipeline import make_pipeline
 from pathlib import Path
@@ -16,6 +16,8 @@ FEATURES = [
 ]
 
 FIGURES_DIR = Path(__file__).resolve().parent.parent / "reports" / "figures"
+DEFAULT_RF_PARAMS = {"n_estimators": 300, "max_depth": 12, "min_samples_leaf": 3}
+FINAL_PARAMS = {"n_estimators": 200, "max_depth": 6, "min_samples_leaf": 1, "max_features": 0.4}
 
 
 def build_daily_series(sales, returns=None, drop_last_day=False):
@@ -114,6 +116,10 @@ def validate_features(f):
 
 
 
+
+
+
+
 @dataclass
 class TrainingResult:
     model: RandomForestRegressor
@@ -205,7 +211,15 @@ def train_and_test(daily, n_estimators=300, random_state=42):
         test_size=len(test),
         importance=importance,
     )
-    
+
+
+
+
+
+
+
+
+
 def make_linear_model():
     """Linear Regression me one-hot per diten e javes (numri 0-6 nuk eshte shkalle lineare)"""
     
@@ -299,22 +313,23 @@ def cross_validate_models(daily, n_splits=5):
             
     return pd.DataFrame(rows)
 
-def make_random_forest(random_state=42, n_jobs=1):
-    """Random Forest me te njejtat hiperparametra si ne krahsim"""
+
+
+
+
+
+
+def make_random_forest(random_state=42, n_jobs=1, params=None):
+    """Random Forest me hiperparametrat e paracaktuar, ose me ata qe jepen ne 'params'"""
     
-    return RandomForestRegressor(
-        n_estimators=300,
-        max_depth=12,
-        min_samples_leaf=3,
-        random_state=random_state,
-        n_jobs=n_jobs,
-    )
-    
-def train_final_model(daily, random_state=42):
+    settings = {**DEFAULT_RF_PARAMS, **(params or{})}
+    return RandomForestRegressor(random_state=random_state, n_jobs=n_jobs, **settings)   
+
+def train_final_model(daily, random_state=42, params=FINAL_PARAMS):
     """Trajnon Random Forest mbi te gjitha ditet e disponueshme (per parashikimin e se ardhmes)"""
     
     data = make_dataset(daily)
-    model = make_random_forest(random_state)
+    model = make_random_forest(random_state, params=params)
     model.fit(data[FEATURES], data["target"])
     return model
 
@@ -356,7 +371,7 @@ def backtest_horizons(daily, max_h=7, random_state=42):
     """
     data = make_dataset(daily)
     train, test = split_chronological(data)
-    model = make_random_forest(random_state)
+    model = make_random_forest(random_state, params=FINAL_PARAMS)
     model.fit(train[FEATURES], train["target"])
     
     net = daily["net_revenue"]
@@ -424,3 +439,69 @@ def save_forecast_figure(daily, forecast, folder=FIGURES_DIR, last_days=60):
     fig.savefig(path, dpi=150)
     plt.close(fig)
     print(f"U ruajt grafiku: {path}")
+    
+    
+    
+    
+PARAM_DISTRIBUTIONS ={
+    "n_estimators": [200, 300, 500],
+    "max_depth": [4, 6, 8, 10, 12, 16],
+    "min_samples_leaf": [1, 2, 3, 5, 8, 12],
+    "max_features": [0.4, 0.6, 0.8, 1.0],
+}
+
+def tune_random_forest(daily, n_iter=30, n_splits=4, random_state=42):
+    """Tuning me RandomizedSearchCV dhe TimeSeriesSplit, vetem mbi pjesen e trajnimit
+    
+    Kthen (search, MAE e modelit te paracaktuar ne te njejtat folds)"""
+    data = make_dataset(daily)
+    train, _ = split_chronological(data)
+    
+    cv = TimeSeriesSplit(n_splits=n_splits)
+    search = RandomizedSearchCV(
+        estimator=make_random_forest(random_state, n_jobs=1),
+        param_distributions=PARAM_DISTRIBUTIONS,
+        n_iter=n_iter,
+        scoring="neg_mean_absolute_error",
+        cv=cv,
+        random_state=random_state,
+        n_jobs=-1,
+        refit=True
+    )
+    search.fit(train[FEATURES], train["target"])
+    
+    default_scores = -cross_val_score(
+        make_random_forest(random_state, n_jobs=1),
+        train[FEATURES],
+        train["target"],
+        scoring="neg_mean_absolute_error",
+        cv=cv,
+        n_jobs=-1
+    )
+    return search, default_scores
+
+def compare_tuned(daily, tuned_model, random_state=42):
+    """Krahason Random Forest te paracaktuar me ate te rregulluar ne pjesen e testimit"""
+    
+    data = make_dataset(daily)
+    train, test = split_chronological(data)
+    
+    defaut_model = make_random_forest(random_state)
+    defaut_model.fit(train[FEATURES], train["target"])
+    
+    test_view = pd.DataFrame(
+        {
+            "actual": test["target"],
+            "default": defaut_model.predict(test[FEATURES]),
+            "tuned": tuned_model.predict(test[FEATURES]),
+            "baseline_week": test["lag_7"],
+            "is_open": test["is_open"]
+        },
+        index=test.index
+    )
+    candidates = [
+        ("Random Forest (default)", "default"),
+        ("Random Forest (tuned)", "tuned"),
+        ("Baseline: java e kaluar", "baseline_week"),
+    ]
+    return build_metrics_table(test_view, candidates), test_view
