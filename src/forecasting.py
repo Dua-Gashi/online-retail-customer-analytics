@@ -9,6 +9,7 @@ from sklearn.model_selection import TimeSeriesSplit, RandomizedSearchCV,  cross_
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.pipeline import make_pipeline
 from pathlib import Path
+from sklearn.inspection import permutation_importance
 
 FEATURES = [
     "lag_1", "lag_2", "lag_7", "lag_14", "avg_7", "avg_14", "day_of_week", 
@@ -443,6 +444,9 @@ def save_forecast_figure(daily, forecast, folder=FIGURES_DIR, last_days=60):
     
     
     
+    
+    
+    
 PARAM_DISTRIBUTIONS ={
     "n_estimators": [200, 300, 500],
     "max_depth": [4, 6, 8, 10, 12, 16],
@@ -505,3 +509,71 @@ def compare_tuned(daily, tuned_model, random_state=42):
         ("Baseline: java e kaluar", "baseline_week"),
     ]
     return build_metrics_table(test_view, candidates), test_view
+
+
+
+
+
+
+
+FEATURES_GROUPS = {
+    "Dita e javes (day_of_week, is_weekend)": ["day_of_week", "is_weekend"],
+    "Sezoni (month, year_sin, year_cos)": ["month", "year_sin", "year_cos"],
+    "Pushimi i fundvitit (year_end_break)": ["year_end_break"],
+    "Java e kaluar (lag_7, lag_14)": ["lag_7", "lag_14"],
+    "Dite te fundit (lag_1, lag_2)": ["lag_1", "lag_2"],
+    "Mesatare te fundit (avg_7, avg_14)": ["avg_7", "avg_14"]
+}
+
+def final_test_view(daily, random_state=42):
+    """Trajnon modelin perfundimtar (FINAL_PARAMS) mbi trajnimin dhe kthen (modeli, testi, parashikimet)"""
+    
+    data = make_dataset(daily)
+    train, test = split_chronological(data)
+    model = make_random_forest(random_state, params=FINAL_PARAMS)
+    model.fit(train[FEATURES], train["target"])
+    view = pd.DataFrame(
+        {
+            "actual": test["target"],
+            "prediction": model.predict(test[FEATURES]),
+            "baseline_week": test["lag_7"],
+            "is_open": test["is_open"]
+        },
+        index=test.index,
+    )
+    return model, test, view
+
+def permutation_table(model, X, y, n_repeats=20, random_state=42):
+    """Permutation importance per cdo vecori: sa rritet MAE kur vlerat e saj perzihen"""
+    
+    result = permutation_importance(
+        model, X, y,
+        scoring="neg_mean_absolute_error",
+        n_repeats=n_repeats,
+        random_state=random_state,
+        n_jobs=-1,
+    )
+    return pd.DataFrame(
+        {
+            "feature": X.columns,
+            "MAE_rritje": result.importances_mean,
+            "devijimi": result.importances_std,
+        }
+    ).sort_values("MAE_rritje", ascending=False)
+    
+
+def grouped_permutation(model, X, y, groups=FEATURES_GROUPS, n_repeats=20, random_state=42):
+    """Permutation importance per grupe vecorish: vecorit e nje grupi perzihen bashke"""
+    
+    rng = np.random.default_rng(random_state)
+    base = mean_absolute_error(y, model.predict(X))
+    rows = []
+    for name, cols in groups.items():
+        increases = []
+        for _ in range(n_repeats):
+            shuffled = X.copy()
+            order = rng.permutation(len(X))
+            shuffled[cols] = X[cols].to_numpy()[order]
+            increases.append(mean_absolute_error(y, model.predict(shuffled)) - base)
+        rows.append({"grupi": name, "MAE_rritje": np.mean(increases), "devijimi": np.std(increases)})
+    return pd.DataFrame(rows).sort_values("MAE_rritje", ascending=False)
