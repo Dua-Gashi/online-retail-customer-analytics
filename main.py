@@ -23,6 +23,7 @@ from src.forecasting import (
     predict_future,
     save_forecast_figure,
 ) 
+from src.powerbi_export import export_powerbi_tables, validate_export
 
 def main():
     print("1. Ngarkimi i te dhenave")
@@ -65,7 +66,11 @@ def main():
     final_model = train_final_model(daily)
     forecast = predict_future(daily, final_model, days=7)
     print(forecast.to_string())
-    save_forecast_figure(daily, forecast) 
+    save_forecast_figure(daily, forecast)
+    
+    print("\n8. Eksporti per Power BI")
+    export_powerbi_tables(sales, returns, segments, daily, forecast)
+    validate_export()
     
     print("\nPermbledhje\n")
     print(f"Periudha: {sales["Date"].min().date()} -> {sales["Date"].max().date()}")
